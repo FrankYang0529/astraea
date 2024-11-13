@@ -16,15 +16,24 @@
  */
 package org.astraea.app.homework;
 
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import org.apache.kafka.clients.producer.Partitioner;
 import org.apache.kafka.common.Cluster;
 
 public class YourPartitioner implements Partitioner {
 
+  private Map<String, Map<Integer, Long>> topicPartitionToCount;
+  private Map<Integer, Long> brokerToCount;
+
   // get your magic configs
   @Override
-  public void configure(Map<String, ?> configs) {}
+  public void configure(Map<String, ?> configs) {
+    topicPartitionToCount = new HashMap<>();
+    brokerToCount = new HashMap<>();
+  }
 
   // write your magic code
   @Override
@@ -33,7 +42,51 @@ public class YourPartitioner implements Partitioner {
     var partitions = cluster.availablePartitionsForTopic(topic);
     // no available partition so we return -1
     if (partitions.isEmpty()) return -1;
-    return partitions.get(0).partition();
+
+    for (var node : cluster.nodes()) {
+      brokerToCount.computeIfAbsent(node.id(), id -> 0L);
+    }
+
+    topicPartitionToCount.computeIfAbsent(topic, t -> new HashMap<>());
+    for (var partition : partitions) {
+      topicPartitionToCount.get(topic).computeIfAbsent(partition.partition(), p -> 0L);
+    }
+
+    var brokerToPartitions = new HashMap<Integer, Set<Integer>>();
+    for (var partition : partitions) {
+      var broker = partition.leader().id();
+      brokerToPartitions.computeIfAbsent(broker, id -> new HashSet<Integer>());
+      brokerToPartitions.get(broker).add(partition.partition());
+    }
+
+    // sort broker by count
+    var brokerIterator =
+        brokerToCount.entrySet().stream()
+            .sorted(Map.Entry.comparingByValue())
+            .map(Map.Entry::getKey)
+            .iterator();
+    while (brokerIterator.hasNext()) {
+      var broker = brokerIterator.next();
+      var partitionSet = brokerToPartitions.get(broker);
+      if (partitionSet == null) continue;
+
+      // sort partition by count
+      var partition =
+          topicPartitionToCount.get(topic).entrySet().stream()
+              .filter(entry -> partitionSet.contains(entry.getKey()))
+              .sorted(Map.Entry.comparingByValue())
+              .map(Map.Entry::getKey)
+              .findFirst();
+      if (partition.isPresent()) {
+        brokerToCount.put(broker, brokerToCount.get(broker) + 1);
+        topicPartitionToCount
+            .get(topic)
+            .put(partition.get(), topicPartitionToCount.get(topic).get(partition.get()) + 1);
+        return partition.get();
+      }
+    }
+
+    return -1;
   }
 
   @Override
