@@ -78,10 +78,12 @@ public class YourPartitioner implements Partitioner {
               .map(Map.Entry::getKey)
               .findFirst();
       if (partition.isPresent()) {
-        brokerToCount.put(broker, brokerToCount.get(broker) + 1);
+        brokerToCount.put(broker, brokerToCount.get(broker) + valueBytes.length);
         topicPartitionToCount
             .get(topic)
-            .put(partition.get(), topicPartitionToCount.get(topic).get(partition.get()) + 1);
+            .put(
+                partition.get(),
+                topicPartitionToCount.get(topic).get(partition.get()) + valueBytes.length);
         return partition.get();
       }
     }
