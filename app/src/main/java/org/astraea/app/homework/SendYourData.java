@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -67,6 +68,7 @@ public class SendYourData {
           Duration.ofSeconds(10),
           1);
     }
+    System.out.println("duration=" + param.duration.toMillis());
     var keys =
         List.of(
             new Key(IntStream.range(0, 1000).mapToObj(Long::valueOf).toList()),
@@ -130,6 +132,7 @@ public class SendYourData {
 
   public static class YourSender implements Closeable {
     private final KafkaProducer<Key, byte[]> producer;
+    private final Map<Integer, ByteBuffer> cache = new ConcurrentHashMap<>(4);
 
     @Override
     public void close() throws IOException {
@@ -139,16 +142,24 @@ public class SendYourData {
     public YourSender(String bootstrapServers) {
       Serializer<Key> serializer =
           (topic, key) -> {
-            var buffer = ByteBuffer.allocate(Long.BYTES * key.vs.size());
-            key.vs.forEach(buffer::putLong);
-            buffer.flip();
-            var bytes = new byte[buffer.remaining()];
-            buffer.get(bytes);
-            return bytes;
+            ByteBuffer buffer = cache.get(key.vs.size());
+            if (buffer == null) {
+              System.out.println("create new buffer");
+              buffer = ByteBuffer.allocate(8 * key.vs.size());
+              key.vs.forEach(buffer::putLong);
+              cache.put(key.vs.size(), buffer);
+            }
+            return buffer.array();
           };
       producer =
           new KafkaProducer<>(
-              Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers),
+              Map.of(
+                  ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,
+                  bootstrapServers,
+                  ProducerConfig.LINGER_MS_CONFIG,
+                  "1000",
+                  ProducerConfig.BATCH_SIZE_CONFIG,
+                  "131072"),
               serializer,
               new ByteArraySerializer());
     }
